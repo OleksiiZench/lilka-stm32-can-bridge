@@ -1,0 +1,50 @@
+# =========================
+# PlatformIO
+# =========================
+.pio/
+.pioenvs/
+.piolibdeps/
+libdeps/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+*.code-workspace
+
+# =========================
+# Python (for scripts)
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+pip-log.txt
+
+# =========================
+# C# / .NET (for scripts)
+# =========================
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+
+# =========================
+# Private data and configurations
+# =========================
+# Ignore all files containing keywords for secrets
+*secrets*.h
+*credentials*.h
+*private_config*.h
+.env
+*.env
+
+# =========================
+# Linux and temporary editor files
+# =========================
+*~
+*.swp
+*.swo
+.directory
