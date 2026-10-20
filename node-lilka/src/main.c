@@ -30,6 +30,8 @@ static void can_monitor_task(void *arg)
 
 void app_main(void)
 {
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    
     const mcp2515_config_t cfg = {
         .host = SPI3_HOST,
         .mosi = CAN_PIN_MOSI,
@@ -40,5 +42,17 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK(mcp2515_init(&s_can, &cfg));
+
+    esp_err_t err = mcp2515_selftest(&s_can);
+
+    if (err == ESP_OK)
+    {
+        ESP_LOGI(TAG, "MCP2515 selftest OK");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "MCP2515 selftest FAILED (%s)", esp_err_to_name(err));
+    }
+
     xTaskCreate(can_monitor_task, "can_monitor", 4096, NULL, 5, NULL);
 }
