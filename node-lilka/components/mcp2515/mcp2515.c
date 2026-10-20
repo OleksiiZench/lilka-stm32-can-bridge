@@ -20,6 +20,9 @@ static const char *TAG = "mcp2515";
 #define OPMOD_CONFIG         0x80
 #define CANCTRL_RESET_VALUE  0x87
 
+#define CMD_WRITE 0x02
+#define REG_CNF1  0x2A
+
 static esp_err_t mcp2515_reset(mcp2515_t *dev)
 {
     uint8_t cmd = CMD_RESET;
@@ -85,4 +88,42 @@ esp_err_t mcp2515_probe(mcp2515_t *dev)
         return ESP_ERR_NOT_FOUND;
     }
     return ESP_OK;
+}
+
+esp_err_t mcp2515_write_reg(mcp2515_t *dev, uint8_t addr, uint8_t value)
+{
+    uint8_t tx[3] = { CMD_WRITE, addr, value };
+
+    spi_transaction_t t = {
+        .length = 24,
+        .tx_buffer = tx,
+    };
+    ESP_RETURN_ON_ERROR(spi_device_polling_transmit(dev->spi, &t), TAG, "write failed");
+    return ESP_OK;
+}
+
+esp_err_t mcp2515_selftest(mcp2515_t *dev)
+{
+    static const uint8_t patterns[] = { 0x55, 0xAA };
+
+    uint8_t original = 0;
+    ESP_RETURN_ON_ERROR(mcp2515_read_reg(dev, REG_CNF1, &original), TAG, "read original");
+
+    esp_err_t result = ESP_OK;
+
+    for (size_t i = 0; i < sizeof(patterns); i++) {
+        uint8_t readback = 0;
+
+        ESP_RETURN_ON_ERROR(mcp2515_write_reg(dev, REG_CNF1, patterns[i]), TAG, "write pattern");
+        ESP_RETURN_ON_ERROR(mcp2515_read_reg(dev, REG_CNF1, &readback), TAG, "read pattern");
+
+        if (readback != patterns[i]) {
+            ESP_LOGE(TAG, "CNF1 mismatch: wrote 0x%02X, read 0x%02X", patterns[i], readback);
+            result = ESP_ERR_INVALID_RESPONSE;
+            break;
+        }
+    }
+
+    ESP_RETURN_ON_ERROR(mcp2515_write_reg(dev, REG_CNF1, original), TAG, "restore");
+    return result;
 }

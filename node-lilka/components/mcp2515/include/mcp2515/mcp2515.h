@@ -22,3 +22,7 @@ esp_err_t mcp2515_init(mcp2515_t *dev, const mcp2515_config_t *cfg);
 esp_err_t mcp2515_read_reg(mcp2515_t *dev, uint8_t addr, uint8_t *value);
 
 esp_err_t mcp2515_probe(mcp2515_t *dev);
+
+esp_err_t mcp2515_write_reg(mcp2515_t *dev, uint8_t addr, uint8_t value);
+
+esp_err_t mcp2515_selftest(mcp2515_t *dev);
