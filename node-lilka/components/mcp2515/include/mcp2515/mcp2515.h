@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "driver/gpio.h"
@@ -9,6 +10,7 @@
 typedef enum {
     MCP2515_OSC_8MHZ,
     MCP2515_OSC_16MHZ,
+    MCP2515_OSC_COUNT,
 } mcp2515_osc_t;
 
 typedef enum {
@@ -33,11 +35,12 @@ typedef struct {
     gpio_num_t miso;
     gpio_num_t sclk;
     gpio_num_t cs;
-    int clock_hz;
+    uint32_t clock_hz;
     mcp2515_osc_t osc;
 } mcp2515_config_t;
 
 typedef struct {
+    spi_host_device_t host;
     spi_device_handle_t spi;
     mcp2515_osc_t osc;
 } mcp2515_t;
@@ -48,9 +51,19 @@ typedef struct {
     uint8_t data[8];
 } can_frame_t;
 
+typedef struct {
+    uint8_t canintf;   /* raw CANINTF register */
+    uint8_t eflg;      /* raw EFLG register */
+    bool bus_off;      /* EFLG.TXBO: controller lost the bus */
+    bool rx_overflow;  /* EFLG.RX0OVR: a frame was lost */
+    bool error;        /* CANINTF.ERRIF: bus error */
+} mcp2515_status_t;
+
 esp_err_t mcp2515_init(mcp2515_t *dev, const mcp2515_config_t *cfg);
+void mcp2515_deinit(mcp2515_t *dev);
 esp_err_t mcp2515_read_reg(mcp2515_t *dev, uint8_t addr, uint8_t *value);
 esp_err_t mcp2515_probe(mcp2515_t *dev);
+esp_err_t mcp2515_get_status(mcp2515_t *dev, mcp2515_status_t *status);
 esp_err_t mcp2515_write_reg(mcp2515_t *dev, uint8_t addr, uint8_t value);
 esp_err_t mcp2515_selftest(mcp2515_t *dev);
 

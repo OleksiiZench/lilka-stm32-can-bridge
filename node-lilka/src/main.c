@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -20,8 +21,12 @@ static esp_err_t loopback_roundtrip(uint8_t counter)
     };
     can_frame_t received = { 0 };
 
-    ESP_ERROR_CHECK_WITHOUT_ABORT(mcp2515_send(&s_can, &sent, 100));
-    esp_err_t err = mcp2515_receive(&s_can, &received, 100);
+    esp_err_t err = mcp2515_send(&s_can, &sent, 100);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = mcp2515_receive(&s_can, &received, 100);
     if (err != ESP_OK) {
         return err;
     }
@@ -45,6 +50,17 @@ static void can_monitor_task(void *arg)
                  probe == ESP_OK ? "OK" : "FAIL",
                  esp_err_to_name(loop), counter - 1);
 
+        /* Bus errors and lost frames are invisible in the interrupt flags of the
+           receive path, they have to be read from EFLG explicitly. */
+        mcp2515_status_t status = { 0 };
+        if (mcp2515_get_status(&s_can, &status) == ESP_OK &&
+            (status.bus_off || status.rx_overflow || status.error)) {
+            ESP_LOGW(TAG, "CAN status: bus_off=%d rx_overflow=%d error=%d "
+                          "(CANINTF=0x%02X EFLG=0x%02X)",
+                     status.bus_off, status.rx_overflow, status.error,
+                     status.canintf, status.eflg);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -67,7 +83,11 @@ void app_main(void)
     ESP_LOGI(TAG, "startup selftest: %s", esp_err_to_name(st));
 
     ESP_ERROR_CHECK(mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K));
+    /* Loopback keeps the traffic off the bus: the real bridge mode is NORMAL. */
     ESP_ERROR_CHECK(mcp2515_set_mode(&s_can, MCP2515_MODE_LOOPBACK));
 
-    xTaskCreate(can_monitor_task, "can_monitor", 4096, NULL, 5, NULL);
+    if (xTaskCreate(can_monitor_task, "can_monitor", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "cannot create can_monitor task");
+        abort();
+    }
 }
