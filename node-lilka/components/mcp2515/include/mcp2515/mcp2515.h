@@ -22,11 +22,11 @@ typedef enum {
 } mcp2515_bitrate_t;
 
 typedef enum {
-    MCP2515_MODE_NORMAL      = 0x00,
-    MCP2515_MODE_SLEEP       = 0x20,
-    MCP2515_MODE_LOOPBACK    = 0x40,
+    MCP2515_MODE_NORMAL = 0x00,
+    MCP2515_MODE_SLEEP = 0x20,
+    MCP2515_MODE_LOOPBACK = 0x40,
     MCP2515_MODE_LISTEN_ONLY = 0x60,
-    MCP2515_MODE_CONFIG      = 0x80,
+    MCP2515_MODE_CONFIG = 0x80,
 } mcp2515_mode_t;
 
 typedef struct {
@@ -52,11 +52,11 @@ typedef struct {
 } can_frame_t;
 
 typedef struct {
-    uint8_t canintf;   /* raw CANINTF register */
-    uint8_t eflg;      /* raw EFLG register */
-    bool bus_off;      /* EFLG.TXBO: controller lost the bus */
-    bool rx_overflow;  /* EFLG.RX0OVR: a frame was lost */
-    bool error;        /* CANINTF.ERRIF: bus error */
+    uint8_t canintf;  /* raw CANINTF register */
+    uint8_t eflg;     /* raw EFLG register */
+    bool bus_off;     /* EFLG.TXBO: controller lost the bus */
+    bool rx_overflow; /* EFLG.RX0OVR: a frame was lost */
+    bool error;       /* CANINTF.ERRIF: bus error */
 } mcp2515_status_t;
 
 esp_err_t mcp2515_init(mcp2515_t *dev, const mcp2515_config_t *cfg);

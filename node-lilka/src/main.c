@@ -12,14 +12,13 @@ static const char *TAG = "app";
 
 static mcp2515_t s_can;
 
-static esp_err_t loopback_roundtrip(uint8_t counter)
-{
+static esp_err_t loopback_roundtrip(uint8_t counter) {
     const can_frame_t sent = {
         .id = 0x123,
         .dlc = 8,
-        .data = { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, counter },
+        .data = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, counter},
     };
-    can_frame_t received = { 0 };
+    can_frame_t received = {0};
 
     esp_err_t err = mcp2515_send(&s_can, &sent, 100);
     if (err != ESP_OK) {
@@ -38,35 +37,32 @@ static esp_err_t loopback_roundtrip(uint8_t counter)
     return ESP_OK;
 }
 
-static void can_monitor_task(void *arg)
-{
+static void can_monitor_task(void *arg) {
     uint8_t counter = 0;
 
     while (1) {
         esp_err_t probe = mcp2515_probe(&s_can);
         esp_err_t loop = loopback_roundtrip(counter++);
 
-        ESP_LOGI(TAG, "probe: %s | loopback: %s (cnt=%u)",
-                 probe == ESP_OK ? "OK" : "FAIL",
+        ESP_LOGI(TAG, "probe: %s | loopback: %s (cnt=%u)", probe == ESP_OK ? "OK" : "FAIL",
                  esp_err_to_name(loop), counter - 1);
 
         /* Bus errors and lost frames are invisible in the interrupt flags of the
            receive path, they have to be read from EFLG explicitly. */
-        mcp2515_status_t status = { 0 };
+        mcp2515_status_t status = {0};
         if (mcp2515_get_status(&s_can, &status) == ESP_OK &&
             (status.bus_off || status.rx_overflow || status.error)) {
-            ESP_LOGW(TAG, "CAN status: bus_off=%d rx_overflow=%d error=%d "
-                          "(CANINTF=0x%02X EFLG=0x%02X)",
-                     status.bus_off, status.rx_overflow, status.error,
-                     status.canintf, status.eflg);
+            ESP_LOGW(TAG,
+                     "CAN status: bus_off=%d rx_overflow=%d error=%d "
+                     "(CANINTF=0x%02X EFLG=0x%02X)",
+                     status.bus_off, status.rx_overflow, status.error, status.canintf, status.eflg);
         }
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
-void app_main(void)
-{
+void app_main(void) {
     const mcp2515_config_t cfg = {
         .host = SPI3_HOST,
         .mosi = CAN_PIN_MOSI,
