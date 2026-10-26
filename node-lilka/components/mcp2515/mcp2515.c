@@ -39,6 +39,7 @@ static const char *TAG = "mcp2515";
 /* EFLG bits */
 #define EFLG_TXBO (1 << 5)
 #define EFLG_RX0OVR (1 << 6)
+#define EFLG_RX1OVR (1 << 7)
 
 /* TXBnCTRL bits */
 #define TXBCTRL_TXREQ (1 << 3)
@@ -228,6 +229,10 @@ esp_err_t mcp2515_get_status(mcp2515_t *dev, mcp2515_status_t *status) {
     status->bus_off = (status->eflg & EFLG_TXBO) != 0;
     status->rx_overflow = (status->eflg & EFLG_RX0OVR) != 0;
     status->error = (status->canintf & CANINTF_ERRIF) != 0;
+
+    ESP_RETURN_ON_ERROR(mcp2515_bit_modify(dev, REG_CANINTF, CANINTF_ERRIF, 0), TAG, "clear ERRIF");
+    ESP_RETURN_ON_ERROR(mcp2515_bit_modify(dev, REG_EFLG, EFLG_RX0OVR | EFLG_RX1OVR, 0), TAG,
+                        "clear overflow flags");
 
     return ESP_OK;
 }
