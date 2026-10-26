@@ -78,9 +78,19 @@ void app_main(void) {
     esp_err_t st = mcp2515_selftest(&s_can);
     ESP_LOGI(TAG, "startup selftest: %s", esp_err_to_name(st));
 
-    ESP_ERROR_CHECK(mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K));
+    esp_err_t err = mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to set bitrate: %s; CAN monitor not started", esp_err_to_name(err));
+        return;
+    }
+
     /* Loopback keeps the traffic off the bus: the real bridge mode is NORMAL. */
-    ESP_ERROR_CHECK(mcp2515_set_mode(&s_can, MCP2515_MODE_LOOPBACK));
+    err = mcp2515_set_mode(&s_can, MCP2515_MODE_LOOPBACK);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to enter loopback mode: %s; CAN monitor not started",
+                 esp_err_to_name(err));
+        return;
+    }
 
     if (xTaskCreate(can_monitor_task, "can_monitor", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "cannot create can_monitor task");
