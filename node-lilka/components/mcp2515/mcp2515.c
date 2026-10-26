@@ -388,7 +388,7 @@ esp_err_t mcp2515_receive(mcp2515_t *dev, can_frame_t *frame, uint32_t timeout_m
     if (frame->dlc > 8) {
         frame->dlc = 8;
     }
-    memcpy(frame->data, &r[5], 8);
+    memcpy(frame->data, &r[5], frame->dlc);
 
     /* The frame is consumed even when it cannot be decoded, otherwise it stays in
        the buffer forever and the receiver spins on the same frame. */
