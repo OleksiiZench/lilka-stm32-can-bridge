@@ -227,7 +227,7 @@ esp_err_t mcp2515_get_status(mcp2515_t *dev, mcp2515_status_t *status) {
     ESP_RETURN_ON_ERROR(mcp2515_read_reg(dev, REG_EFLG, &status->eflg), TAG, "read EFLG");
 
     status->bus_off = (status->eflg & EFLG_TXBO) != 0;
-    status->rx_overflow = (status->eflg & EFLG_RX0OVR) != 0;
+    status->rx_overflow = (status->eflg & (EFLG_RX0OVR | EFLG_RX1OVR)) != 0;
     status->error = (status->canintf & CANINTF_ERRIF) != 0;
 
     ESP_RETURN_ON_ERROR(mcp2515_bit_modify(dev, REG_CANINTF, CANINTF_ERRIF, 0), TAG, "clear ERRIF");

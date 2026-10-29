@@ -63,7 +63,14 @@ esp_err_t mcp2515_init(mcp2515_t *dev, const mcp2515_config_t *cfg);
 void mcp2515_deinit(mcp2515_t *dev);
 esp_err_t mcp2515_read_reg(mcp2515_t *dev, uint8_t addr, uint8_t *value);
 esp_err_t mcp2515_probe(mcp2515_t *dev);
+
+/**
+ * Reads CANINTF and EFLG, then clears the sticky flags ERRIF, RX0OVR and RX1OVR.
+ * The returned status reflects the values read BEFORE clearing.
+ * Note: this call has a side effect, so a second call will not report the same flags.В
+ */
 esp_err_t mcp2515_get_status(mcp2515_t *dev, mcp2515_status_t *status);
+
 esp_err_t mcp2515_write_reg(mcp2515_t *dev, uint8_t addr, uint8_t value);
 esp_err_t mcp2515_selftest(mcp2515_t *dev);
 
