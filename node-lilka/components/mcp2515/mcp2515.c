@@ -55,6 +55,22 @@ static const char *TAG = "mcp2515";
 /* RXBnCTRL.RXM[1:0] = 11 -> masks/filters off, accept any message */
 #define RXBCTRL_RXM_ANY 0x60
 
+/* TXB0 load command layout: SPI instruction, start address, then frame fields */
+#define TXB0_CMD 0
+#define TXB0_ADDR 1
+#define TXB0_SIDH 2
+#define TXB0_SIDL 3
+#define TXB0_EID8 4
+#define TXB0_EID0 5
+#define TXB0_DLC 6
+#define TXB0_DATA 7
+
+/* RXB0 read command layout: SPI instruction, start address, then frame registers */
+#define RXB0_CMD 0
+#define RXB0_ADDR 1
+#define RXB0_DATA 2
+#define RXB0_FRAME_LEN 13
+
 /* Expected values after reset */
 #define CANSTAT_OPMOD_MASK 0xE0
 #define OPMOD_CONFIG 0x80
@@ -335,14 +351,17 @@ esp_err_t mcp2515_send(mcp2515_t *dev, const can_frame_t *frame, uint32_t timeou
     ESP_RETURN_ON_ERROR(mcp2515_read_reg(dev, REG_TXB0CTRL, &ctrl), TAG, "read TXB0CTRL");
     ESP_RETURN_ON_FALSE((ctrl & TXBCTRL_TXREQ) == 0, ESP_ERR_INVALID_STATE, TAG, "TXB0 busy");
 
-    uint8_t tx[2 + 5 + 8] = {CMD_WRITE, REG_TXB0SIDH};
-    tx[2] = (uint8_t)(frame->id >> 3);          /* SIDH */
-    tx[3] = (uint8_t)((frame->id & 0x07) << 5); /* SIDL */
-    tx[4] = 0;                                  /* EID8 */
-    tx[5] = 0;                                  /* EID0 */
-    tx[6] = frame->dlc;                         /* DLC */
-    memcpy(&tx[7], frame->data, frame->dlc);
-    ESP_RETURN_ON_ERROR(mcp2515_transfer(dev, tx, NULL, 7 + frame->dlc), TAG, "load TXB0");
+    uint8_t tx[TXB0_DATA + 8] = {
+        [TXB0_CMD] = CMD_WRITE,
+        [TXB0_ADDR] = REG_TXB0SIDH,
+    };
+    tx[TXB0_SIDH] = (uint8_t)(frame->id >> 3);          /* SIDH */
+    tx[TXB0_SIDL] = (uint8_t)((frame->id & 0x07) << 5); /* SIDL */
+    tx[TXB0_EID8] = 0;                                  /* EID8 */
+    tx[TXB0_EID0] = 0;                                  /* EID0 */
+    tx[TXB0_DLC] = frame->dlc;                          /* DLC */
+    memcpy(&tx[TXB0_DATA], frame->data, frame->dlc);
+    ESP_RETURN_ON_ERROR(mcp2515_transfer(dev, tx, NULL, TXB0_DATA + frame->dlc), TAG, "load TXB0");
 
     uint8_t rts = CMD_RTS_TXB0;
     ESP_RETURN_ON_ERROR(mcp2515_transfer(dev, &rts, NULL, 1), TAG, "RTS");
@@ -376,12 +395,15 @@ esp_err_t mcp2515_receive(mcp2515_t *dev, can_frame_t *frame, uint32_t timeout_m
         mcp2515_wait_reg(dev, REG_CANINTF, CANINTF_RX0IF, CANINTF_RX0IF, timeout_ms), TAG,
         "wait RX0IF");
 
-    /* RXB0SIDH .. RXB0D7: 13 consecutive registers */
-    uint8_t tx[2 + 13] = {CMD_READ, REG_RXB0SIDH};
+    /* RXB0SIDH .. RXB0D7: RXB0_FRAME_LEN consecutive registers */
+    uint8_t tx[RXB0_DATA + RXB0_FRAME_LEN] = {
+        [RXB0_CMD] = CMD_READ,
+        [RXB0_ADDR] = REG_RXB0SIDH,
+    };
     uint8_t rx[sizeof(tx)] = {0};
     ESP_RETURN_ON_ERROR(mcp2515_transfer(dev, tx, rx, sizeof(tx)), TAG, "read RXB0");
 
-    const uint8_t *r = &rx[2];
+    const uint8_t *r = &rx[RXB0_DATA];
 
     /* Decode before clearing RX0IF, so that the frame is not silently dropped. */
     const bool extended = (r[1] & SIDL_IDE) != 0;
