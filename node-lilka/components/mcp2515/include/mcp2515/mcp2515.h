@@ -67,7 +67,7 @@ esp_err_t mcp2515_probe(mcp2515_t *dev);
 /**
  * Reads CANINTF and EFLG, then clears the sticky flags ERRIF, RX0OVR and RX1OVR.
  * The returned status reflects the values read BEFORE clearing.
- * Note: this call has a side effect, so a second call will not report the same flags.В
+ * Note: this call has a side effect, so a second call will not report the same flags.
  */
 esp_err_t mcp2515_get_status(mcp2515_t *dev, mcp2515_status_t *status);
 
