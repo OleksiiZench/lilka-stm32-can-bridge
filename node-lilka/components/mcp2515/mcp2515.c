@@ -391,9 +391,10 @@ esp_err_t mcp2515_send(mcp2515_t *dev, const can_frame_t *frame, uint32_t timeou
 }
 
 esp_err_t mcp2515_receive(mcp2515_t *dev, can_frame_t *frame, uint32_t timeout_ms) {
-    ESP_RETURN_ON_ERROR(
-        mcp2515_wait_reg(dev, REG_CANINTF, CANINTF_RX0IF, CANINTF_RX0IF, timeout_ms), TAG,
-        "wait RX0IF");
+    esp_err_t err = mcp2515_wait_reg(dev, REG_CANINTF, CANINTF_RX0IF, CANINTF_RX0IF, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
 
     /* RXB0SIDH .. RXB0D7: RXB0_FRAME_LEN consecutive registers */
     uint8_t tx[RXB0_DATA + RXB0_FRAME_LEN] = {
