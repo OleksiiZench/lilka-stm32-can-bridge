@@ -1,58 +1,111 @@
-#include "board.h"
 #include "app_config.h"
+#include "board.h"
 #include "board_pins.h"
 #include "mcp2515.h"
 
-static mcp2515_t can;
+static mcp2515_t s_can;
+static bool s_can_ready = false;
+static uint32_t s_last_rx_ms = 0;
+static uint32_t s_rx_count = 0;
+static uint8_t s_last_rx_counter = 0;
+static uint8_t s_tx_counter = 0;
 
-static void can_bringup_test(void) {
+static mcp2515_err_t can_init(void) {
     mcp2515_err_t err;
-    can_frame_t tx = {
-        .id = 0x123,
-        .dlc = 8,
-        .data = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x42},
-    };
-    can_frame_t rx = {0};
 
-    err = mcp2515_init(&can, &hspi1, CAN_CS_GPIO_PORT, CAN_CS_PIN,
+    err = mcp2515_init(&s_can, &hspi1, CAN_CS_GPIO_PORT, CAN_CS_PIN,
                        MCP2515_OSC_8MHZ, 10);
-    board_log("[STM32] mcp init: %d\r\n", (int)err);
     if (err != MCP2515_OK) {
-        return;
+        return err;
     }
 
-    err = mcp2515_probe(&can);
-    board_log("[STM32] probe: %d\r\n", (int)err);
+    err = mcp2515_probe(&s_can);
     if (err != MCP2515_OK) {
-        return;
+        return err;
     }
 
-    err = mcp2515_selftest(&can);
-    board_log("[STM32] selftest: %d\r\n", (int)err);
-
-    err = mcp2515_set_bitrate(&can, MCP2515_BITRATE_500K);
-    board_log("[STM32] bitrate: %d\r\n", (int)err);
+    err = mcp2515_selftest(&s_can);
     if (err != MCP2515_OK) {
-        return;
+        return err;
     }
 
-    err = mcp2515_set_mode(&can, MCP2515_MODE_LOOPBACK);
-    board_log("[STM32] loopback: %d\r\n", (int)err);
+    err = mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K);
     if (err != MCP2515_OK) {
-        return;
+        return err;
     }
 
-    err = mcp2515_send(&can, &tx, 100);
-    board_log("[STM32] send: %d\r\n", (int)err);
-    if (err != MCP2515_OK) {
-        return;
+    return mcp2515_set_mode(&s_can, MCP2515_MODE_NORMAL);
+}
+
+static void can_poll_rx(void) {
+    can_frame_t frame;
+
+    while (1) {
+        mcp2515_err_t err = mcp2515_receive(&s_can, &frame, 0);
+
+        if (err == MCP2515_ERR_TIMEOUT) {
+            break;
+        }
+        if (err == MCP2515_ERR_NOT_SUPPORTED) {
+            continue;
+        }
+        if (err != MCP2515_OK) {
+            break;
+        }
+
+        if (frame.id == APP_PARTNER_ID) {
+            s_last_rx_ms = board_millis();
+            s_rx_count++;
+            if (frame.dlc >= 4) {
+                s_last_rx_counter = frame.data[3];
+            }
+        }
+    }
+}
+
+static mcp2515_err_t can_send_heartbeat(void) {
+    can_frame_t tx = {0};
+
+    tx.id = APP_NODE_ID;
+    tx.dlc = 4;
+    tx.data[0] = 'S';
+    tx.data[1] = 'T';
+    tx.data[2] = 'M';
+    tx.data[3] = s_tx_counter++;
+
+    return mcp2515_send(&s_can, &tx, 100);
+}
+
+static void can_log_status(void) {
+    mcp2515_status_t status = {0};
+    mcp2515_err_t err = mcp2515_get_status(&s_can, &status);
+    uint32_t now = board_millis();
+    bool link_up = (s_rx_count > 0) &&
+                   ((now - s_last_rx_ms) < APP_LINK_TIMEOUT_MS);
+
+    if (link_up) {
+        board_log("[%s] CAN: link up | rx=%lu last=%u age=%lu ms",
+                  APP_NODE_NAME,
+                  (unsigned long)s_rx_count,
+                  (unsigned)s_last_rx_counter,
+                  (unsigned long)(now - s_last_rx_ms));
+    } else {
+        board_log("[%s] CAN: no link | rx=%lu",
+                  APP_NODE_NAME,
+                  (unsigned long)s_rx_count);
     }
 
-    err = mcp2515_receive(&can, &rx, 100);
-    board_log("[STM32] recv: %d\r\n", (int)err);
     if (err == MCP2515_OK) {
-        board_log("[STM32] rx id=0x%03X dlc=%u d7=0x%02X\r\n",
-                  (unsigned)rx.id, (unsigned)rx.dlc, (unsigned)rx.data[7]);
+        board_log(" | EFLG=0x%02X CANINTF=0x%02X\r\n",
+                  (unsigned)status.eflg,
+                  (unsigned)status.canintf);
+    } else {
+        board_log(" | status err=%d\r\n", (int)err);
+    }
+
+    if (err == MCP2515_OK && status.bus_off) {
+        board_log("[%s] bus off, reinit\r\n", APP_NODE_NAME);
+        s_can_ready = false;
     }
 }
 
@@ -60,14 +113,17 @@ int main(void) {
     board_init();
 
     board_log("\r\n[%s] start\r\n", APP_NODE_NAME);
-    board_log("[%s] sysclk: %lu Hz\r\n", APP_NODE_NAME, (unsigned long)SystemCoreClock);
+    board_log("[%s] sysclk: %lu Hz\r\n",
+              APP_NODE_NAME, (unsigned long)SystemCoreClock);
 
-    can_bringup_test();
-    
     uint32_t last_led = 0;
-    uint32_t last_log = 0;
+    uint32_t last_tick = 0;
 
     while (1) {
+        if (s_can_ready) {
+            can_poll_rx();
+        }
+
         uint32_t now = board_millis();
 
         if (now - last_led >= 500u) {
@@ -75,11 +131,36 @@ int main(void) {
             board_led_toggle();
         }
 
-        if (now - last_log >= 1000u) {
-            last_log = now;
-            board_log("[%s] alive, uptime=%lu s\r\n",
-                      APP_NODE_NAME, (unsigned long)(now / 1000u));
+        if (now - last_tick < APP_TX_PERIOD_MS) {
+            continue;
         }
+        last_tick = now;
+
+        if (!s_can_ready) {
+            mcp2515_err_t err = can_init();
+            s_can_ready = (err == MCP2515_OK);
+
+            board_log("[%s] MCP2515: %s (err=%d)\r\n",
+                      APP_NODE_NAME,
+                      s_can_ready ? "OK" : "FAIL",
+                      (int)err);
+            continue;
+        }
+
+        mcp2515_err_t err = can_send_heartbeat();
+
+        if (err == MCP2515_ERR_INVALID_STATE || err == MCP2515_ERR_IO) {
+            board_log("[%s] send failed: %d, reinit\r\n",
+                      APP_NODE_NAME, (int)err);
+            s_can_ready = false;
+            continue;
+        }
+        if (err != MCP2515_OK) {
+            board_log("[%s] send failed: %d\r\n",
+                      APP_NODE_NAME, (int)err);
+        }
+
+        can_log_status();
     }
 }
 
