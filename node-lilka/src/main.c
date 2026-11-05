@@ -5,95 +5,188 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "app_config.h"
 #include "board_pins.h"
 #include "mcp2515/mcp2515.h"
 
 static const char *TAG = "app";
 
+static const mcp2515_config_t s_cfg = {
+    .host = SPI3_HOST,
+    .mosi = CAN_PIN_MOSI,
+    .miso = CAN_PIN_MISO,
+    .sclk = CAN_PIN_SCLK,
+    .cs = CAN_PIN_CS,
+    .clock_hz = 1 * 1000 * 1000,
+    .osc = MCP2515_OSC_8MHZ,
+};
+
 static mcp2515_t s_can;
+static bool s_can_started = false;
+static bool s_can_ready = false;
+static uint32_t s_last_rx_ms = 0;
+static uint32_t s_rx_count = 0;
+static uint8_t s_last_rx_counter = 0;
 
-static esp_err_t loopback_roundtrip(uint8_t counter) {
-    const can_frame_t sent = {
-        .id = 0x123,
-        .dlc = 8,
-        .data = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, counter},
-    };
-    can_frame_t received = {0};
+static void can_stop(void) {
+    if (s_can_started) {
+        mcp2515_deinit(&s_can);
+        s_can_started = false;
+    }
+}
 
-    esp_err_t err = mcp2515_send(&s_can, &sent, 100);
+static esp_err_t can_start(void) {
+    esp_err_t err = mcp2515_init(&s_can, &s_cfg);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MCP2515 init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_can_started = true;
+
+    esp_err_t selftest = mcp2515_selftest(&s_can);
+    ESP_LOGI(TAG, "selftest: %s", esp_err_to_name(selftest));
+
+    err = mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K);
+    if (err == ESP_OK) {
+        err = mcp2515_set_mode(&s_can, MCP2515_MODE_NORMAL);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "CAN setup failed: %s", esp_err_to_name(err));
+        can_stop();
         return err;
     }
 
-    err = mcp2515_receive(&s_can, &received, 100);
-    if (err != ESP_OK) {
-        return err;
-    }
+    s_last_rx_ms = 0;
+    s_rx_count = 0;
+    s_last_rx_counter = 0;
 
-    if (received.id != sent.id || received.dlc != sent.dlc ||
-        memcmp(received.data, sent.data, sent.dlc) != 0) {
-        return ESP_ERR_INVALID_RESPONSE;
-    }
+    ESP_LOGI(TAG, "CAN ready: 500 kbit/s, NORMAL mode, node id=0x%03X",
+             APP_NODE_ID);
     return ESP_OK;
 }
 
-static void can_monitor_task(void *arg) {
-    uint8_t counter = 0;
+static esp_err_t can_restart(void) {
+    can_stop();
+    vTaskDelay(pdMS_TO_TICKS(10));
+    return can_start();
+}
 
+static void can_poll_rx(void) {
     while (1) {
-        esp_err_t probe = mcp2515_probe(&s_can);
-        esp_err_t loop = loopback_roundtrip(counter++);
+        can_frame_t frame;
 
-        ESP_LOGI(TAG, "probe: %s | loopback: %s (cnt=%u)", probe == ESP_OK ? "OK" : "FAIL",
-                 esp_err_to_name(loop), counter - 1);
-
-        /* Bus errors and lost frames are invisible in the interrupt flags of the
-           receive path, they have to be read from EFLG explicitly. */
-        mcp2515_status_t status = {0};
-        if (mcp2515_get_status(&s_can, &status) == ESP_OK &&
-            (status.bus_off || status.rx_overflow || status.error)) {
-            ESP_LOGW(TAG,
-                     "CAN status: bus_off=%d rx_overflow=%d error=%d "
-                     "(CANINTF=0x%02X EFLG=0x%02X)",
-                     status.bus_off, status.rx_overflow, status.error, status.canintf, status.eflg);
+        esp_err_t err = mcp2515_receive(&s_can, &frame, 10);
+        if (err == ESP_ERR_TIMEOUT) {
+            break;
+        }
+        if (err == ESP_ERR_NOT_SUPPORTED) {
+            continue;
+        }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "receive failed: %s", esp_err_to_name(err));
+            break;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (frame.id == APP_PARTNER_ID) {
+            s_last_rx_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            s_rx_count++;
+            if (frame.dlc >= 4) {
+                s_last_rx_counter = frame.data[3];
+            }
+        }
+    }
+}
+
+static esp_err_t can_send_heartbeat(uint8_t counter) {
+    const can_frame_t tx = {
+        .id = APP_NODE_ID,
+        .dlc = 4,
+        .data = {'L', 'I', 'L', counter},
+    };
+
+    return mcp2515_send(&s_can, &tx, 100);
+}
+
+static void can_log_status(void) {
+    mcp2515_status_t status = {0};
+    esp_err_t err = mcp2515_get_status(&s_can, &status);
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    bool link_up = (s_rx_count > 0) &&
+                   ((now - s_last_rx_ms) < APP_LINK_TIMEOUT_MS);
+
+    if (link_up) {
+        ESP_LOGI(TAG,
+                 "CAN: link up | rx=%lu last=%u age=%lu ms | EFLG=0x%02X CANINTF=0x%02X",
+                 (unsigned long)s_rx_count,
+                 (unsigned)s_last_rx_counter,
+                 (unsigned long)(now - s_last_rx_ms),
+                 (unsigned)status.eflg,
+                 (unsigned)status.canintf);
+    } else {
+        ESP_LOGI(TAG, "CAN: no link | rx=%lu | EFLG=0x%02X CANINTF=0x%02X",
+                 (unsigned long)s_rx_count,
+                 (unsigned)status.eflg,
+                 (unsigned)status.canintf);
+    }
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "status read failed: %s", esp_err_to_name(err));
+    }
+    if (err == ESP_OK && status.bus_off) {
+        ESP_LOGW(TAG, "bus off, restarting CAN");
+        s_can_ready = false;
+    }
+}
+
+static void can_task(void *arg) {
+    (void)arg;
+
+    TickType_t last_tx = xTaskGetTickCount();
+    uint8_t tx_counter = 0;
+
+    while (1) {
+        if (!s_can_ready) {
+            esp_err_t err = can_restart();
+            s_can_ready = (err == ESP_OK);
+            if (!s_can_ready) {
+                ESP_LOGW(TAG, "CAN restart failed: %s", esp_err_to_name(err));
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            last_tx = xTaskGetTickCount();
+            continue;
+        }
+
+        TickType_t now = xTaskGetTickCount();
+
+        if ((now - last_tx) >= pdMS_TO_TICKS(APP_TX_PERIOD_MS)) {
+            last_tx = now;
+
+            esp_err_t err = can_send_heartbeat(tx_counter++);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "send failed: %s", esp_err_to_name(err));
+                if (err == ESP_ERR_INVALID_STATE || err == ESP_FAIL) {
+                    s_can_ready = false;
+                }
+            }
+
+            can_log_status();
+            if (!s_can_ready) {
+                continue;
+            }
+        }
+
+        can_poll_rx();
     }
 }
 
 void app_main(void) {
-    const mcp2515_config_t cfg = {
-        .host = SPI3_HOST,
-        .mosi = CAN_PIN_MOSI,
-        .miso = CAN_PIN_MISO,
-        .sclk = CAN_PIN_SCLK,
-        .cs = CAN_PIN_CS,
-        .clock_hz = 1 * 1000 * 1000,
-        .osc = MCP2515_OSC_8MHZ,
-    };
+    ESP_LOGI(TAG, "starting CAN bridge node lilka (id=0x%03X, partner=0x%03X)",
+             APP_NODE_ID, APP_PARTNER_ID);
 
-    ESP_ERROR_CHECK(mcp2515_init(&s_can, &cfg));
+    s_can_ready = (can_start() == ESP_OK);
 
-    esp_err_t st = mcp2515_selftest(&s_can);
-    ESP_LOGI(TAG, "startup selftest: %s", esp_err_to_name(st));
-
-    esp_err_t err = mcp2515_set_bitrate(&s_can, MCP2515_BITRATE_500K);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to set bitrate: %s; CAN monitor not started", esp_err_to_name(err));
-        return;
-    }
-
-    /* Loopback keeps the traffic off the bus: the real bridge mode is NORMAL. */
-    err = mcp2515_set_mode(&s_can, MCP2515_MODE_LOOPBACK);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "failed to enter loopback mode: %s; CAN monitor not started",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    if (xTaskCreate(can_monitor_task, "can_monitor", 4096, NULL, 5, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "cannot create can_monitor task");
+    if (xTaskCreate(can_task, "can_task", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "cannot create can_task");
         abort();
     }
 }
