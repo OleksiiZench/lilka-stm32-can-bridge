@@ -160,3 +160,8 @@ uint32_t board_millis(void) {
 void board_led_toggle(void) {
     HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
 }
+
+void board_led_set(bool on) {
+    HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN,
+                      on ? GPIO_PIN_RESET : GPIO_PIN_SET);
+}

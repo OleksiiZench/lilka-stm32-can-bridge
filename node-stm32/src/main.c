@@ -9,6 +9,7 @@ static uint32_t s_last_rx_ms = 0;
 static uint32_t s_rx_count = 0;
 static uint8_t s_last_rx_counter = 0;
 static uint8_t s_tx_counter = 0;
+static bool s_led_on = false;
 
 static mcp2515_err_t can_init(void) {
     mcp2515_err_t err;
@@ -37,6 +38,41 @@ static mcp2515_err_t can_init(void) {
     return mcp2515_set_mode(&s_can, MCP2515_MODE_NORMAL);
 }
 
+static mcp2515_err_t can_send_ack(uint8_t seq, bool led_on) {
+    can_frame_t tx = {0};
+
+    tx.id = APP_ACK_ID;
+    tx.dlc = 5;
+    tx.data[0] = 'A';
+    tx.data[1] = 'C';
+    tx.data[2] = 'K';
+    tx.data[3] = seq;
+    tx.data[4] = led_on ? 1 : 0;
+
+    return mcp2515_send(&s_can, &tx, 100);
+}
+
+static void can_handle_command(const can_frame_t *frame) {
+    if (frame->dlc < 4) {
+        return;
+    }
+    if (frame->data[0] != 'C' || frame->data[1] != 'M' || frame->data[2] != 'D') {
+        return;
+    }
+
+    uint8_t seq = frame->data[3];
+    s_led_on = !s_led_on;
+    board_led_set(s_led_on);
+
+    board_log("[%s] cmd seq=%u -> LED %s\r\n",
+              APP_NODE_NAME, (unsigned)seq, s_led_on ? "ON" : "OFF");
+
+    mcp2515_err_t err = can_send_ack(seq, s_led_on);
+    if (err != MCP2515_OK) {
+        board_log("[%s] ack send failed: %d\r\n", APP_NODE_NAME, (int)err);
+    }
+}
+
 static void can_poll_rx(void) {
     can_frame_t frame;
 
@@ -59,6 +95,8 @@ static void can_poll_rx(void) {
             if (frame.dlc >= 4) {
                 s_last_rx_counter = frame.data[3];
             }
+        } else if (frame.id == APP_CMD_ID) {
+            can_handle_command(&frame);
         }
     }
 }
@@ -116,7 +154,6 @@ int main(void) {
     board_log("[%s] sysclk: %lu Hz\r\n",
               APP_NODE_NAME, (unsigned long)SystemCoreClock);
 
-    uint32_t last_led = 0;
     uint32_t last_tick = 0;
 
     while (1) {
@@ -125,11 +162,6 @@ int main(void) {
         }
 
         uint32_t now = board_millis();
-
-        if (now - last_led >= 500u) {
-            last_led = now;
-            board_led_toggle();
-        }
 
         if (now - last_tick < APP_TX_PERIOD_MS) {
             continue;
