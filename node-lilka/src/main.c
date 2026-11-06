@@ -27,6 +27,44 @@ static bool s_can_ready = false;
 static uint32_t s_last_rx_ms = 0;
 static uint32_t s_rx_count = 0;
 static uint8_t s_last_rx_counter = 0;
+static uint8_t s_cmd_seq = 0;
+static bool s_key_prev = false;
+static bool s_key_stable = false;
+static uint32_t s_key_change_ms = 0;
+
+static void key_init(void) {
+    const gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << KEY_A_PIN,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&cfg));
+
+    s_key_prev = (gpio_get_level(KEY_A_PIN) == 0);
+    s_key_stable = s_key_prev;
+    s_key_change_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+static bool key_a_just_pressed(void) {
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    bool raw = (gpio_get_level(KEY_A_PIN) == 0);
+
+    if (raw != s_key_prev) {
+        s_key_prev = raw;
+        s_key_change_ms = now;
+        return false;
+    }
+
+    if ((now - s_key_change_ms) >= APP_KEY_DEBOUNCE_MS && raw != s_key_stable) {
+        s_key_stable = raw;
+        return s_key_stable;
+    }
+
+    return false;
+}
 
 static void can_stop(void) {
     if (s_can_started) {
@@ -93,6 +131,13 @@ static void can_poll_rx(void) {
             if (frame.dlc >= 4) {
                 s_last_rx_counter = frame.data[3];
             }
+        } else if (frame.id == APP_ACK_ID) {
+            if (frame.dlc >= 4 &&
+                frame.data[0] == 'A' && frame.data[1] == 'C' && frame.data[2] == 'K') {
+                bool led_on = (frame.dlc >= 5) && (frame.data[4] != 0);
+                ESP_LOGI(TAG, "ack seq=%u led=%s",
+                         (unsigned)frame.data[3], led_on ? "ON" : "OFF");
+            }
         }
     }
 }
@@ -102,6 +147,16 @@ static esp_err_t can_send_heartbeat(uint8_t counter) {
         .id = APP_NODE_ID,
         .dlc = 4,
         .data = {'L', 'I', 'L', counter},
+    };
+
+    return mcp2515_send(&s_can, &tx, 100);
+}
+
+static esp_err_t can_send_key_toggle(uint8_t seq) {
+    const can_frame_t tx = {
+        .id = APP_CMD_ID,
+        .dlc = 4,
+        .data = {'C', 'M', 'D', seq},
     };
 
     return mcp2515_send(&s_can, &tx, 100);
@@ -145,6 +200,8 @@ static void can_task(void *arg) {
     uint8_t tx_counter = 0;
 
     while (1) {
+        bool key_press = key_a_just_pressed();
+
         if (!s_can_ready) {
             esp_err_t err = can_restart();
             s_can_ready = (err == ESP_OK);
@@ -154,6 +211,16 @@ static void can_task(void *arg) {
             }
             last_tx = xTaskGetTickCount();
             continue;
+        }
+
+        if (key_press) {
+            uint8_t seq = s_cmd_seq++;
+            esp_err_t err = can_send_key_toggle(seq);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "key A -> cmd seq=%u", (unsigned)seq);
+            } else {
+                ESP_LOGW(TAG, "key A send failed: %s", esp_err_to_name(err));
+            }
         }
 
         TickType_t now = xTaskGetTickCount();
@@ -183,6 +250,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "starting CAN bridge node lilka (id=0x%03X, partner=0x%03X)",
              APP_NODE_ID, APP_PARTNER_ID);
 
+    key_init();
     s_can_ready = (can_start() == ESP_OK);
 
     if (xTaskCreate(can_task, "can_task", 4096, NULL, 5, NULL) != pdPASS) {

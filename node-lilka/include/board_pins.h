@@ -6,3 +6,5 @@
 #define CAN_PIN_MISO GPIO_NUM_12
 #define CAN_PIN_SCLK GPIO_NUM_47
 #define CAN_PIN_CS GPIO_NUM_14
+
+#define KEY_A_PIN    GPIO_NUM_5
