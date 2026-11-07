@@ -48,3 +48,5 @@ pip-log.txt
 *.swp
 *.swo
 .directory
+
+lilka-stm32-can-bus-guide.pdf
